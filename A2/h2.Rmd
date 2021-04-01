@@ -1,0 +1,541 @@
+---
+title: "STA442_A2"
+author: "Jiahao Cheng"
+date: "2020/11/1"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+# STA442 Assignment 2
+# install.packages("Pmisc", repos="http://r-forge.r-project.org")
+# install.packages("INLA")
+library("Pmisc")
+library("INLA")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r Leaver}
+# Q1: School leaver's data
+# sUrl = "http://www.bristol.ac.uk/cmm/media/migrated/jsp.zip"
+# dir.create(file.path("..", "data"), showWarnings = FALSE)
+# (Pmisc::downloadIfOld(sUrl, file.path("..", "data")))
+
+school = read.fwf("../data/JSP.DAT", widths = c(2, 1, 1, 1, 2, 4, 2, 2, 1), col.names = c("school", "class", "gender", "socialClass", "ravensTest", "student", "english", "math", "year"))
+school$socialClass = factor(school$socialClass, labels = c("I", "II", "IIIn", "IIIm", "IV", "V", "longUnemp", "currUnemp", "absent"))
+school$gender = factor(school$gender, labels = c("f", "m"))
+school$classUnique = paste(school$school, school$class)
+school$studentUnique = paste(school$school, school$class, school$student)
+school$grade = factor(school$year)
+
+schoolLme = glmmTMB::glmmTMB(math ~ gender + socialClass + 
+                               grade + (1 | school) + (1 | classUnique) + 
+                               (1 | studentUnique), data = school)
+summary(schoolLme)
+
+hist(40 - school$math, breaks = 100)
+
+# Notes:
+# random effect: school, class, student (random intercept)
+```
+
+```{r Leaver INLA}
+# Q1: School leaver's data
+# sUrl = "http://www.bristol.ac.uk/cmm/media/migrated/jsp.zip"
+# dir.create(file.path("..", "data"), showWarnings = FALSE)
+# (Pmisc::downloadIfOld(sUrl, file.path("..", "data")))
+schoolInla = inla(math ~ gender + socialClass + 
+                    grade + f(school, model='iid') + f(classUnique, model='iid') +
+                    f(studentUnique, model='iid'), data = school, 
+                  family='poisson',
+                  control.fixed=list(mean=0, mean.intercept=0, prec=0.2^(-2), 
+                                     prec.intercept=10^(-2)), 
+                  control.compute=list(return.marginals=TRUE))
+```
+
+Then, form a table:
+```{r Leaver Table}
+schoolTable <- schoolInla$summary.fixed
+schoolTable[, 1] <- exp(schoolTable[, 1])
+knitr::kable(schoolTable, digits=3)
+
+schoolTable2 <- 1/sqrt(schoolInla$summary.hyper)
+# schoolTable2[, 1] <- exp(schoolTable2[, 1])
+knitr::kable(schoolTable2, digits=3)
+
+table1 <- rbind(schoolInla$summary.fixed[,c("mean","0.025quant","0.975quant")], Pmisc::priorPostSd(schoolInla)$summary[,c("mean","0.025quant","0.975quant")])
+table1[, 1] <- exp(table1[, 1])
+knitr::kable(table1, digits=3)
+
+# draw prior + posterior
+par(mfrow=c(2, 2))
+names <- c(names(schoolInla$marginals.fixed)[1: 3], 
+           names(schoolInla$marginals.fixed)[11])
+plot(schoolInla$marginals.fixed$`(Intercept)`, type='l', main=names[1])
+lines(schoolInla$marginals.fixed$`(Intercept)`[, 'x'],
+      dnorm(schoolInla$marginals.fixed$`(Intercept)`[, 'x'], mean=0, sd=10),
+      col='grey', lwd=3)
+legend("topright", legend=c("posterior", "prior"),
+       col=c("black", "grey"), lty=1:1, lwd=1:3, cex=0.8)
+plot(schoolInla$marginals.fixed$genderm, type='l', main=names[2])
+lines(schoolInla$marginals.fixed$genderm[, 'x'],
+      dnorm(schoolInla$marginals.fixed$genderm[, 'x'], mean=0, sd=0.2),
+      col='grey', lwd=3)
+plot(schoolInla$marginals.fixed$socialClassII, type='l', main=names[3])
+lines(schoolInla$marginals.fixed$socialClassII[, 'x'],
+      dnorm(schoolInla$marginals.fixed$socialClassII[, 'x'], mean=0, sd=0.2),
+      col='grey', lwd=3)
+plot(schoolInla$marginals.fixed$grade1, type='l', main=names[4])
+lines(schoolInla$marginals.fixed$grade1[, 'x'],
+      dnorm(schoolInla$marginals.fixed$grade1[, 'x'], mean=0, sd=0.2),
+      col='grey', lwd=3)
+
+par(mfrow=c(2, 2))
+schoolPrior = Pmisc::priorPostSd(schoolInla)
+do.call(matplot, schoolPrior$school$matplot)
+do.call(legend, schoolPrior$legend)
+mtext("school", side=3)
+
+do.call(matplot, schoolPrior$classUnique$matplot)
+do.call(legend, schoolPrior$legend)
+mtext("classUnique", side=3)
+
+do.call(matplot, schoolPrior$studentUnique$matplot)
+do.call(legend, schoolPrior$legend)
+mtext("studentUnique", side=3)
+
+# interpret:
+# random: student > class > school
+# 
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r Smoke}
+# Q2 Smoke
+dataDir = "../data"
+smokeFile = file.path(dataDir, "smoke2014.RData")
+if (!file.exists(smokeFile)) {
+  download.file("http://pbrown.ca/teaching/appliedstats/data/smoke2014.RData",
+                smokeFile)
+}
+
+load(smokeFile)
+smoke[1:3, c("Age", "ever_cigarettes", "Sex", "Race", 
+             "state", "school", "RuralUrban")]
+
+forInla = smoke[smoke$Age > 10, c("Age", "ever_cigarettes", 
+                                  "Sex", "Race", "state", "school", "RuralUrban", 
+                                  "Harm_belief_of_chewing_to")]
+forInla = na.omit(forInla)
+forInla$y = as.numeric(forInla$ever_cigarettes)
+forInla$ageFac = factor(as.numeric(as.character(forInla$Age)))
+# forInla$ageFac = relevel(factor(forInla$Age), '14')
+forInla$chewingHarm = factor(forInla$Harm_belief_of_chewing_to,
+levels = 1:4, labels = c("less", "equal", "more", "dunno"))
+
+
+toPredict = expand.grid(ageFac = levels(forInla$ageFac),
+RuralUrban = levels(forInla$RuralUrban), chewingHarm = levels(forInla$chewingHarm), 
+Sex = levels(forInla$Sex))
+forLincombs = do.call(inla.make.lincombs, 
+                      as.data.frame(model.matrix(~Sex + ageFac * 
+                                                   RuralUrban * chewingHarm, 
+                                                 data = toPredict)))
+fitS2 = inla(y ~ Sex + ageFac * RuralUrban * chewingHarm + 
+               f(state, model = "iid", hyper = 
+                   list(prec = list(prior = "pc.prec", param = c(99, 0.05)))), 
+             data = forInla, family = "binomial", control.inla = 
+               list(strategy = "gaussian"), lincomb = forLincombs)
+
+rbind(fitS2$summary.fixed[, c("mean", "0.025quant", "0.975quant")], 
+      Pmisc::priorPostSd(fitS2)$summary[, c("mean", "0.025quant", "0.975quant")])
+# create matrix of predicted probabilities
+theCoef = exp(fitS2$summary.lincomb.derived[, c("0.5quant", 
+                                                "0.025quant", "0.975quant")])
+theCoef = theCoef/(1 + theCoef)
+# create an x axis, shift age by chewing harm group
+toPredict$Age = as.numeric(as.character(toPredict$ageFac))
+toPredict$shiftX = as.numeric(toPredict$chewingHarm)/10
+toPredict$x = toPredict$Age + toPredict$shiftX
+# only plot rural males
+toPlot = toPredict$Sex == "M" & toPredict$RuralUrban == "Rural" 
+plot(toPredict[toPlot, "x"], theCoef[toPlot, "0.5quant"], 
+     xlab = "age", ylab = "probability", ylim = c(0, 1), 
+     pch = 15, col = toPredict[toPlot, "chewingHarm"])
+segments(toPredict[toPlot, "x"], theCoef[toPlot, "0.025quant"],
+y1 = theCoef[toPlot, "0.975quant"], col = toPredict[toPlot, "chewingHarm"])
+legend("topleft", fill = 1:nlevels(toPredict$chewingHarm), 
+       legend = levels(toPredict$chewingHarm), bty = "n",
+       title = "chewing harmful")
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r Smoke INLA}
+# Notes:
+# inla(y~x_1 +x_2 +... + f(state,...) + ...)
+# more model:
+# inla(y~age+sex+race+f(...)+...)
+
+# draw prior for random effects
+# sdState = Pmisc::priorPostSd(ires)
+# do.call(matplot, sdState$STFIPS$matplot)
+# do.call(legend, sdState$legend)
+
+load(smokeFile) 
+smoke[1:3,c('Age','ever_cigarettes','Sex','Race', 
+        'state','school', 'RuralUrban')]
+
+forInla = smoke[,c('Age','ever_cigarettes','Sex','Race', 
+        'state','school', 'RuralUrban')]
+forInla = na.omit(forInla)
+forInla$y = as.numeric(forInla$ever_cigarettes)
+forInla$ageFac = relevel(factor(forInla$Age), '14')
+
+  toPredict = expand.grid(
+    ageFac = levels(forInla$ageFac),
+    RuralUrban = levels(forInla$RuralUrban),
+    Sex = levels(forInla$Sex)
+    )
+forLincombs = do.call(inla.make.lincombs, 
+  as.data.frame(model.matrix( ~ ageFac:RuralUrban + Sex, 
+    data=toPredict)))
+
+# library("INLA")
+
+fitS2 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(log(1.1), 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+
+dim(toPredict)
+dim(fitS2$summary.lincomb.derived)
+toPredict[1:2,]
+fitS2$summary.lincomb.derived[1:2,]
+
+fitS2$summary.hyperpar
+theSd= Pmisc::priorPost(fitS2)
+
+plot(fitS2$marginals.hyperpar$'Precision for state', type='l')
+
+plot(theSd$sd$posterior, type='l', xlab='sd', ylab='dens',
+  xlim = c(0,1), col='blue')
+lines(theSd$sd$prior, col='blue', lty=2)
+
+
+
+fitS3 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(99, 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+theSd3= Pmisc::priorPost(fitS3)
+
+lines(theSd3$sd$posterior, col='red')
+lines(theSd3$sd$prior, col='red', lty=2)
+
+
+
+fitS4 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(log(1.5), 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+theSd4= Pmisc::priorPost(fitS4)
+
+lines(theSd4$sd$posterior, col='grey', lwd=3)
+lines(theSd4$sd$prior, col='grey', lwd=1, lty=2)
+
+legend('topright',
+  lty=1:2, lwd=1, legend = c('post','prior'),
+  bty='n')
+
+
+rbind(
+    fitS2$summary.fixed[, c('mean','0.025quant','0.975quant')],
+    Pmisc::priorPostSd(fitS2)$summary[, c('mean','0.025quant','0.975quant')]
+  )
+
+
+theCoef = exp(fitS4$summary.lincomb.derived[,
+    c('0.5quant','0.025quant','0.975quant')])
+theCoef = theCoef/(1+theCoef)
+
+toPredict$Age = as.numeric(as.character(toPredict$ageFac))
+
+#only plot males
+isMale = toPredict$Sex == 'M'
+shiftRural = 0.1*(toPredict$RuralUrban == 'Rural')
+
+# plotting symbols big when sd is small
+theSd = fitS4$summary.lincomb.derived[,'sd']
+theCex = min(theSd)/theSd
+
+plot(toPredict[isMale,'Age'] + shiftRural[isMale], 
+  theCoef[isMale,'0.5quant'], 
+  xlab='age', ylab='probability', ylim = c(0.015, 1),
+  pch = 15, log='y', 
+  cex = 2*theCex,
+  col = mapmisc::col2html(
+    c(Urban = 'red', Rural = 'green')[as.character(toPredict[isMale,'RuralUrban'])],
+    0.4)
+  )
+
+
+segments(toPredict[isMale,'Age']+ shiftRural[isMale], 
+  theCoef[isMale,'0.025quant'], 
+  y1=theCoef[isMale,'0.975quant'],
+  col = c(Urban = 'red', Rural = 'green')[as.character(toPredict[isMale,'RuralUrban'])])
+
+legend('bottomright', pch=16, col=c('red','green'), legend = c('Urban','Rural'),
+  bty='n')
+
+
+do.call(matplot, theSd4$sd$matplot)
+do.call(legend, theSd4$sd$legend)
+mtext(expression(sigma), side=1)
+
+```
+```{r lab2}
+load(smokeFile) 
+smoke[1:3,c('Age','ever_cigarettes','Sex','Race', 
+        'state','school', 'RuralUrban')]
+
+
+
+
+forInla = smoke[,c('Age','ever_cigarettes','Sex','Race', 
+        'state','school', 'RuralUrban')]
+forInla = na.omit(forInla)
+forInla$y = as.numeric(forInla$ever_cigarettes)
+forInla$ageFac = relevel(factor(forInla$Age), '14')
+
+  toPredict = expand.grid(
+    ageFac = levels(forInla$ageFac),
+    RuralUrban = levels(forInla$RuralUrban),
+    Sex = levels(forInla$Sex)
+    )
+forLincombs = do.call(inla.make.lincombs, 
+  as.data.frame(model.matrix( ~ ageFac:RuralUrban + Sex, 
+    data=toPredict)))
+
+library("INLA")
+
+
+fitS2 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(log(1.1), 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+
+dim(toPredict)
+dim(fitS2$summary.lincomb.derived)
+toPredict[1:2,]
+fitS2$summary.lincomb.derived[1:2,]
+
+fitS2$summary.hyperpar
+theSd= Pmisc::priorPost(fitS2)
+
+plot(fitS2$marginals.hyperpar$'Precision for state', type='l')
+
+plot(theSd$sd$posterior, type='l', xlab='sd', ylab='dens',
+  xlim = c(0,1), col='blue')
+lines(theSd$sd$prior, col='blue', lty=2)
+
+
+
+fitS3 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(99, 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+theSd3= Pmisc::priorPost(fitS3)
+
+lines(theSd3$sd$posterior, col='red')
+lines(theSd3$sd$prior, col='red', lty=2)
+
+
+
+fitS4 = inla(y ~ Sex + ageFac:RuralUrban + 
+    f(state, model='iid', hyper=list(
+        prec=list(prior='pc.prec', param=c(log(1.5), 0.5)))
+    ),
+  data=forInla, family='binomial',
+  lincomb = forLincombs,
+  control.inla = list(strategy='laplace', fast=FALSE))
+theSd4= Pmisc::priorPost(fitS4)
+
+lines(theSd4$sd$posterior, col='grey', lwd=3)
+lines(theSd4$sd$prior, col='grey', lwd=1, lty=2)
+
+legend('topright',
+  lty=1:2, lwd=1, legend = c('post','prior'),
+  bty='n')
+
+
+rbind(
+    fitS2$summary.fixed[, c('mean','0.025quant','0.975quant')],
+    Pmisc::priorPostSd(fitS2)$summary[, c('mean','0.025quant','0.975quant')]
+  )
+
+
+theCoef = exp(fitS4$summary.lincomb.derived[,
+    c('0.5quant','0.025quant','0.975quant')])
+theCoef = theCoef/(1+theCoef)
+
+toPredict$Age = as.numeric(as.character(toPredict$ageFac))
+
+#only plot males
+isMale = toPredict$Sex == 'M'
+shiftRural = 0.1*(toPredict$RuralUrban == 'Rural')
+
+# plotting symbols big when sd is small
+theSd = fitS4$summary.lincomb.derived[,'sd']
+theCex = min(theSd)/theSd
+
+plot(toPredict[isMale,'Age'] + shiftRural[isMale], 
+  theCoef[isMale,'0.5quant'], 
+  xlab='age', ylab='probability', ylim = c(0.015, 1),
+  pch = 15, log='y', 
+  cex = 2*theCex,
+  col = mapmisc::col2html(
+    c(Urban = 'red', Rural = 'green')[as.character(toPredict[isMale,'RuralUrban'])],
+    0.4)
+  )
+
+
+segments(toPredict[isMale,'Age']+ shiftRural[isMale], 
+  theCoef[isMale,'0.025quant'], 
+  y1=theCoef[isMale,'0.975quant'],
+  col = c(Urban = 'red', Rural = 'green')[as.character(toPredict[isMale,'RuralUrban'])])
+
+legend('bottomright', pch=16, col=c('red','green'), legend = c('Urban','Rural'),
+  bty='n')
+
+
+ do.call(matplot, theSd4$sd$matplot)
+ do.call(legend, theSd4$sd$legend)
+ mtext(expression(sigma), side=1)
+```
+my model:
+
+```{r SmokeModel1}
+load(smokeFile)
+smoke[1:3, c("Age", "ever_cigarettes", "Sex", "Race", 
+             "state", "school", "RuralUrban")]
+
+forInla = smoke[smoke$Age > 10, c("Age", "ever_cigarettes", 
+                                  "Sex", "Race", "state", "school", "RuralUrban", 
+                                  "Harm_belief_of_chewing_to")]
+forInla = na.omit(forInla)
+forInla$y = as.numeric(forInla$ever_cigarettes)
+forInla$ageFac = factor(as.numeric(as.character(forInla$Age)))
+# forInla$ageFac = relevel(factor(forInla$Age), '14')
+forInla$chewingHarm = factor(forInla$Harm_belief_of_chewing_to,
+levels = 1:4, labels = c("less", "equal", "more", "dunno"))
+
+
+toPredict = expand.grid(ageFac = levels(forInla$ageFac),
+RuralUrban = levels(forInla$RuralUrban), Race = levels(forInla$Race), 
+Sex = levels(forInla$Sex))
+forLincombs1 = do.call(inla.make.lincombs, 
+                      as.data.frame(model.matrix(~Sex + RuralUrban + ageFac * Race, 
+                                                 data = toPredict)))
+smokeModel1 = inla(y ~ Sex + RuralUrban + ageFac * Race + 
+               f(state, model = "iid", hyper = 
+                   list(prec = list(prior = "pc.prec", param = c(log(3)/2.5, 0.5))))
+               + f(school, model = "iid", hyper =
+                     list(prec = list(prior = "pc.prec", param = c(log(1.5)/2.5, 0.15)))), 
+             data = forInla, family = "binomial", control.inla = 
+               list(strategy = "gaussian"), lincomb = forLincombs1)
+```
+Table:
+```{r Interpret Model1}
+par(mfrow=c(1, 2))
+smokePrior1 = Pmisc::priorPostSd(smokeModel1)
+do.call(matplot, smokePrior1$state$matplot)
+do.call(legend, smokePrior1$legend)
+mtext("state", side=3)
+
+do.call(matplot, smokePrior1$school$matplot)
+do.call(legend, smokePrior1$legend)
+mtext("school", side=3)
+
+# do.call(matplot, smokePrior1$RuralUrban$matplot)
+# do.call(legend, smokePrior1$legend)
+# mtext("Rural-Urban", side=3)
+
+rbind(smokeModel1$summary.fixed[, c("mean", "0.025quant", "0.975quant")], 
+      Pmisc::priorPostSd(smokeModel1)$summary[, c("mean", "0.025quant", 
+                                                  "0.975quant")])
+# create matrix of predicted probabilities
+theCoef1 = exp(smokeModel1$summary.lincomb.derived[, c("0.5quant", 
+                                                "0.025quant", "0.975quant")])
+theCoef1 = theCoef1/(1 + theCoef1)
+```
+
+
+```{r SmokeModel2}
+forLincombs2 = do.call(inla.make.lincombs, 
+                      as.data.frame(model.matrix(~Sex + ageFac * 
+                                                   RuralUrban * Race, 
+                                                 data = toPredict)))
+smokeModel2 = inla(y ~ Sex + ageFac * RuralUrban * Race + 
+               f(state, model = "iid", hyper = 
+                   list(prec = list(prior = "pc.prec", param = c(0.4, 0.1))))
+               + f(school, model = "iid", hyper =
+                     list(prec = list(prior = "pc.prec", param = c(0.55, 0.1)))), 
+             data = forInla, family = "binomial", control.inla = 
+               list(strategy = "gaussian"), lincomb = forLincombs2)
+```
+
+```{r Interpret Model2}
+par(mfrow=c(1, 2))
+smokePrior2 = Pmisc::priorPostSd(smokeModel2)
+do.call(matplot, smokePrior2$state$matplot)
+do.call(legend, smokePrior2$legend)
+mtext("state", side=3)
+
+do.call(matplot, smokePrior2$school$matplot)
+do.call(legend, smokePrior2$legend)
+mtext("school", side=3)
+
+# do.call(matplot, smokePrior2$RuralUrban$matplot)
+# do.call(legend, smokePrior2$legend)
+# mtext("Rural-Urban", side=3)
+
+rbind(smokeModel2$summary.fixed[, c("mean", "0.025quant", "0.975quant")], 
+      Pmisc::priorPostSd(smokeModel2)$summary[, c("mean", "0.025quant", 
+                                                  "0.975quant")])
+# create matrix of predicted probabilities
+theCoef2 = exp(smokeModel2$summary.lincomb.derived[, c("0.5quant", 
+                                                "0.025quant", "0.975quant")])
+theCoef2 = theCoef2/(1 + theCoef2)
+
+smokeTable <- smokeModel2$summary.fixed
+smokeTable[, 1] <- exp(smokeTable[, 1])
+knitr::kable(smokeTable[c(1:13, 15, 25:40, 49:56),], digits=3)
+knitr::kable(Pmisc::priorPostSd(smokeModel2)$summary, digits=3)
+
+smokeTable2 <- 1/sqrt(smokeModel2$summary.hyper)
+# smokeTable2[, 1] <- exp(smokeTable2[, 1])
+knitr::kable(smokeTable2, digits=3)
+```
