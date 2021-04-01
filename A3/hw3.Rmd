@@ -1,0 +1,405 @@
+---
+title: "h3"
+author: "Jiahao Cheng"
+date: "2020/11/6"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library("Pmisc")
+library("INLA")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r CO2}
+cUrl = paste0("http://scrippsco2.ucsd.edu/assets/data/atmospheric/", "stations/flask_co2/daily/daily_flask_co2_mlo.csv")
+cFile = basename(cUrl)
+if (!file.exists(cFile)) download.file(cUrl, cFile)
+co2s = read.table(cFile, header = FALSE, sep = ",", 
+                  skip = 69, stringsAsFactors = FALSE, col.names = 
+                    c("day", "time", "junk1", "junk2", "Nflasks", "quality", "co2"))
+co2s$date = strptime(paste(co2s$day, co2s$time), format = "%Y-%m-%d %H:%M", 
+                     tz = "UTC")
+# remove low-quality measurements
+co2s = co2s[co2s$quality == 0, ]
+
+plot(co2s$date, co2s$co2, log = "y", cex = 0.3, col = "#00000040", 
+     xlab = "time", ylab = "ppm")
+plot(co2s[co2s$date > ISOdate(2015, 3, 1, tz = "UTC"), 
+          c("date", "co2")], log = "y", type = "o", xlab = "time", 
+     ylab = "ppm", cex = 0.5)
+
+co2s$day = as.Date(co2s$date)
+toAdd = data.frame(day = seq(max(co2s$day) + 3, as.Date("2025/1/1"), by = "10 days"), 
+                    co2 = NA)
+co2ext = rbind(co2s[, colnames(toAdd)], toAdd)
+timeOrigin = as.Date("2000/1/1")
+co2ext$timeInla = signif(as.numeric(co2ext$day - timeOrigin)/365.25, 2)
+co2ext$cos12 = cos(2 * pi * co2ext$timeInla)
+co2ext$sin12 = sin(2 * pi * co2ext$timeInla)
+co2ext$cos6 = cos(2 * 2 * pi * co2ext$timeInla)
+co2ext$sin6 = sin(2 * 2 * pi * co2ext$timeInla)
+
+library('INLA', verbose=FALSE)
+# disable some error checking in INLA
+mm = get("inla.models", INLA:::inla.get.inlaEnv()) 
+if(class(mm) == 'function') mm = mm()
+mm$latent$rw2$min.diff = NULL
+assign("inla.models", mm, INLA:::inla.get.inlaEnv())
+
+co2res = inla(co2 ~ sin12 + cos12 + sin6 + cos6 + 
+                f(timeInla, model = 'rw2', prior='pc.prec', param = c(0.1, 0.5)), 
+              data = co2ext, family='gamma', 
+              control.family = list(hyper=list(prec=list(prior='pc.prec', 
+                                                         param=c(0.1, 0.5)))),
+              # add this line if your computer has trouble 
+              # control.inla = list(strategy='gaussian'), 
+              control.predictor = list(compute=TRUE, link=1), 
+              control.compute = list(config=TRUE), verbose=FALSE)
+qCols = c('0.5quant','0.025quant','0.975quant')
+Pmisc::priorPost(co2res)$summary[,qCols]
+
+sampleList = INLA::inla.posterior.sample(30, co2res, 
+                                         selection = list(timeInla = 0))
+sampleMean = do.call(cbind, Biobase::subListExtract(sampleList,
+"latent"))
+sampleDeriv = apply(sampleMean, 2, diff)/diff(co2res$summary.random$timeInla$ID)
+```
+
+Q1 graphs
+```{r CO2 graphs}
+matplot(co2ext$day, co2res$summary.fitted.values[, qCols], 
+        type = "l", col = "black", lty = c(1, 2, 2), log = "y", 
+        xlab = "time", ylab = "ppm", 
+        main="Atmospheric Carbon Dioxide concentrations in Haiwaii")
+Stime = timeOrigin + round(365.25 * co2res$summary.random$timeInla$ID)
+matplot(Stime, co2res$summary.random$timeInla[, qCols], type = "l", 
+        col = "black", lty = c(1, 2, 2), xlab = "time", ylab = "y")
+matplot(Stime[-1], sampleDeriv, type = "l", lty = 1, xaxs = "i", 
+        col = "#00000020", xlab = "time", ylab = "deriv", 
+        ylim = quantile(sampleDeriv, c(0.01, 0.995)), 
+        main="Sample derivatives of CO2 since 1960") 
+abline(v=as.Date("1989/11/9"), col="blue")
+abline(v=as.Date("2020/2/1"), col="red")
+# derivPred = co2res$summary.linear.predictor[grep("time", 
+#                                         rownames(co2res$summary.linear.predictor)), 
+#                                         c("0.5quant", "0.025quant", "0.975quant")]
+# scaleTo10Years = (10*365.25/as.numeric(diff(Stime, units="days")))
+# matplot(Stime[-1], scaleTo10Years*derivPred, type = "l", lty = c(1, 2, 2), 
+#         xaxs = "i", col = "#00000020", xlab = "time", ylab = "deriv", 
+#         ylim = c(0, 0.1), xlim = range(as.numeric(co2s$date)))
+forX = as.Date(c("2018/1/1", "2021/1/1"))
+forX = seq(forX[1], forX[2], by = "6 months")
+toPlot = which(Stime > min(forX) & Stime < max(forX))
+matplot(Stime[toPlot], sampleDeriv[toPlot, ], type = "l", lty = 1, 
+        xaxs = "i", col = "#00000020", xlab = "time", ylab = "deriv", 
+        xaxt = "n", ylim = quantile(sampleDeriv[toPlot, ], c(0.01, 0.995)),
+        main="Sample derivatives of CO2 since 2019")
+abline(v=as.Date("2020/2/1"), col="red")
+axis(1, as.numeric(forX), format(forX, "%b%Y"))
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r Covid}
+# xUrl = paste0("https://www.stat.gouv.qc.ca/statistiques/", 
+#                           "population-demographie/deces-mortalite/", 
+#                           "WeeklyDeaths_QC_2010-2020_AgeGr.csv")
+xUrl = paste0("https://www.stat.gouv.qc.ca/statistiques/population-demographie/deces-mortalite/WeeklyDeaths_QC_2010-2020_AgeGr.csv")
+xFile = basename(xUrl)
+if (!file.exists(xFile)) download.file(xUrl, xFile)
+xWide = read.table(xFile, sep = ";", skip = 7, col.names = c("year", "junk", "age", 
+                                                      paste0("w", 1:53)))
+# xWide = read.table(paste0("https://www.stat.gouv.qc.ca/statistiques/", 
+#                           "population-demographie/deces-mortalite/", 
+#                           "WeeklyDeaths_QC_2010-2020_AgeGr.csv"), 
+#                    sep = ";", skip = 7, col.names = c("year", "junk", "age", 
+#                                                       paste0("w", 1:53)))
+xWide = xWide[grep("^[[:digit:]]+$", xWide$year), ]
+x = reshape2::melt(xWide, id.vars = c("year", "age"), 
+                   measure.vars = grep("^w[[:digit:]]+$", colnames(xWide)))
+x$dead = as.numeric(gsub("[[:space:]]", "", x$value))
+x$week = as.numeric(gsub("w", "", x$variable))
+x$year = as.numeric(x$year)
+x = x[order(x$year, x$week, x$age), ]
+
+newYearsDay = as.Date(ISOdate(x$year, 1, 1))
+x$time = newYearsDay + 7 * (x$week - 1)
+x = x[!is.na(x$dead), ]
+x = x[x$week < 53, ]
+
+plot(x[x$age == "Total", c("time", "dead")], type = "o", log = "y", main="Daily mortality counts in Quebec since 2010")
+
+xWide2 = reshape2::dcast(x, week + age ~ year, value.var = "dead")
+Syear = grep("[[:digit:]]", colnames(xWide2), value = TRUE)
+Scol = RColorBrewer::brewer.pal(length(Syear), "Spectral") 
+matplot(xWide2[xWide2$age == "Total", Syear], type = "l", lty = 1, col = Scol)
+legend("topright", col = Scol, legend = Syear, bty = "n", lty = 1, lwd = 3)
+
+dateCutoff = as.Date("2020/3/1")
+xPreCovid = x[x$time < dateCutoff, ]
+xPostCovid = x[x$time >= dateCutoff, ]
+toForecast = expand.grid(age = unique(x$age), time = unique(xPostCovid$time), 
+                         dead = NA)
+xForInla = rbind(xPreCovid[, colnames(toForecast)], toForecast)
+xForInla = xForInla[order(xForInla$time, xForInla$age), ]
+
+xForInla$timeNumeric = as.numeric(xForInla$time)
+xForInla$timeForInla = (xForInla$timeNumeric - 
+                                as.numeric(as.Date("2015/1/1")))/365.25
+xForInla$timeIid = xForInla$timeNumeric
+xForInla$sin12 = sin(2 * pi * xForInla$timeNumeric/365.25)
+xForInla$sin6 = sin(2 * pi * xForInla$timeNumeric * 2/365.25)
+xForInla$cos12 = cos(2 * pi * xForInla$timeNumeric/365.25)
+xForInla$cos6 = cos(2 * pi * xForInla$timeNumeric * 2/365.25)
+
+xForInlaTotal= xForInla[xForInla$age == 'Total', ]
+library(INLA, verbose=FALSE)
+
+res = inla(dead ~ sin12 + sin6 + cos12 + cos6 + 
+                   f(timeIid, prior='pc.prec', param= c(log(1.2), 0.5)) + 
+                   f(timeForInla, model = 'rw2', prior='pc.prec', 
+                     param= c(0.01, 0.5)), data=xForInlaTotal, 
+           control.predictor = list(compute=TRUE, link=1), 
+           control.compute = list(config=TRUE), 
+           # control.inla = list(fast=FALSE, strategy='laplace'), 
+           family='poisson')
+
+qCols = paste0(c(0.5, 0.025, 0.975), "quant")
+rbind(res$summary.fixed[, qCols], Pmisc::priorPostSd(res)$summary[, qCols])
+
+matplot(xForInlaTotal$time, res$summary.fitted.values[, qCols], type = "l", 
+        ylim = c(1000, 1800), lty = c(1, 2, 2), col = "black", log = "y")
+points(x[x$age == "Total", c("time", "dead")], cex = 0.4, col = "red")
+
+matplot(xForInlaTotal$time, 
+        res$summary.random$timeForInla[, c("0.5quant", "0.975quant", "0.025quant")], 
+        type = "l", lty = c(1, 2, 2), col = "black", ylim = c(-1, 1) * 0.1)
+
+sampleList = INLA::inla.posterior.sample(30, res, selection = list(Predictor = 0))
+sampleIntensity = exp(do.call(cbind, Biobase::subListExtract(sampleList, "latent")))
+sampleDeaths = matrix(rpois(length(sampleIntensity), sampleIntensity), 
+                      nrow(sampleIntensity), ncol(sampleIntensity))
+
+matplot(xForInlaTotal$time, sampleDeaths, col = "#00000010", 
+        lwd = 2, lty = 1, type = "l", log = "y")
+points(x[x$age == "Total", c("time", "dead")], col = "red", cex = 0.5)
+matplot(xForInlaTotal$time, sampleDeaths, col = "#00000010", lwd = 2, 
+        lty = 1, type = "l", log = "y", xlim = as.Date(c("2019/6/1", "2020/11/1")), 
+        ylim = c(1, 2.3) * 1000)
+
+points(x[x$age == "Total", c("time", "dead")], col = "red", cex = 0.5)
+
+xPostCovidTotal = xPostCovid[xPostCovid$age == "Total", ]
+xPostCovidForecast = sampleDeaths[match(xPostCovidTotal$time, xForInlaTotal$time), ]
+excessDeaths = xPostCovidTotal$dead - xPostCovidForecast
+
+matplot(xPostCovidTotal$time, xPostCovidForecast, type = "l", 
+        ylim = c(1000, 2200), col = "black")
+points(xPostCovidTotal[, c("time", "dead")], col = "red")
+matplot(xPostCovidTotal$time, excessDeaths, type = "l", lty = 1, col = "#00000030")
+
+excessDeathsSub1 = excessDeaths[xPostCovidTotal$time > as.Date("2020/03/01") & 
+                                       xPostCovidTotal$time < as.Date("2020/06/01"), 
+                               ]
+excessDeathsInPeriod1 = apply(excessDeathsSub1, 2, sum)
+round(quantile(excessDeathsInPeriod1))
+
+round(quantile(excessDeaths[nrow(excessDeaths), ]))
+
+excessDeathsSub2 = excessDeaths[xPostCovidTotal$time > as.Date("2020/09/01") & 
+                                       xPostCovidTotal$time < as.Date("2020/11/01"), 
+                               ]
+excessDeathsInPeriod2 = apply(excessDeathsSub2, 2, sum)
+round(quantile(excessDeathsInPeriod2))
+
+round(quantile(excessDeaths[nrow(excessDeaths), ]))
+```
+Q2 Other graphs
+
+```{r Q2 70 years old and over}
+plot(x[x$age == "70 years old and over", c("time", "dead")], type = "o", log = "y")
+matplot(xWide2[xWide2$age == "70 years old and over", Syear], 
+        type = "l", lty = 1, col = Scol, main="Death counts by years for 70+ people")
+legend("topright", col = Scol, legend = Syear, bty = "n", lty = 1, lwd = 3)
+
+xForInlaOver70= xForInla[xForInla$age == '70 years old and over', ]
+library(INLA, verbose=FALSE)
+
+res2 = inla(dead ~ sin12 + sin6 + cos12 + cos6 + 
+                   f(timeIid, prior='pc.prec', param= c(log(1.2), 0.5)) + 
+                   f(timeForInla, model = 'rw2', prior='pc.prec', 
+                     param= c(0.01, 0.5)), data=xForInlaOver70, 
+           control.predictor = list(compute=TRUE, link=1), 
+           control.compute = list(config=TRUE), 
+           # control.inla = list(fast=FALSE, strategy='laplace'), 
+           family='poisson')
+```
+
+```{r Q2 res2 plots}
+qCols = paste0(c(0.5, 0.025, 0.975), "quant")
+rbind(res2$summary.fixed[, qCols], Pmisc::priorPostSd(res2)$summary[, qCols])
+
+matplot(xForInlaOver70$time, res2$summary.fitted.values[, qCols], type = "l", 
+        ylim = c(500, 1800), lty = c(1, 2, 2), col = "black", log = "y")
+points(x[x$age == "70 years old and over", c("time", "dead")], cex = 0.4, col = "red")
+
+matplot(xForInlaOver70$time, 
+        res2$summary.random$timeForInla[, c("0.5quant", "0.975quant", "0.025quant")], 
+        type = "l", lty = c(1, 2, 2), col = "black")
+
+sampleListOver = INLA::inla.posterior.sample(30, res2, selection = list(Predictor = 0))
+sampleIntensityOver = exp(do.call(cbind, Biobase::subListExtract(sampleListOver, 
+                                                                 "latent")))
+sampleDeathsOver = matrix(rpois(length(sampleIntensityOver), sampleIntensityOver), 
+                      nrow(sampleIntensityOver), ncol(sampleIntensityOver))
+
+matplot(xForInlaOver70$time, sampleDeathsOver, col = "#00000010", 
+        lwd = 2, lty = 1, type = "l", log = "y", ylim=c(500, 2200))
+points(x[x$age == "70 years old and over", c("time", "dead")], col = "red", cex = 0.5)
+matplot(xForInlaOver70$time, sampleDeathsOver, col = "#00000010", lwd = 2, 
+        lty = 1, type = "l", log = "y", xlim = as.Date(c("2019/6/1", "2020/11/1")), 
+        ylim = c(0.5, 2.3) * 1000)
+
+points(x[x$age == "70 years old and over", c("time", "dead")], col = "red", cex = 0.5)
+
+xPostCovidOver = xPostCovid[xPostCovid$age == "70 years old and over", ]
+xPostCovidForecastOver = sampleDeathsOver[match(xPostCovidOver$time,
+                                                xForInlaOver70$time), ]
+excessDeathsOver = xPostCovidOver$dead - xPostCovidForecastOver
+
+matplot(xPostCovidOver$time, xPostCovidForecastOver, type = "l", 
+        ylim = c(500, 2200), col = "black")
+points(xPostCovidOver[, c("time", "dead")], col = "red")
+matplot(xPostCovidOver$time, excessDeathsOver, type = "l", lty = 1, col = "#00000030",
+        main="Difference between the real and predicted death counts for 70+ people")
+
+excessDeathsOverSub1 = excessDeathsOver[xPostCovidOver$time > as.Date("2020/03/01") & 
+                                       xPostCovidOver$time < as.Date("2020/06/01"), 
+                               ]
+excessDeathsOverInPeriod1 = apply(excessDeathsOverSub1, 2, sum)
+round(quantile(excessDeathsOverInPeriod1))
+
+round(quantile(excessDeathsOver[nrow(excessDeathsOver), ]))
+
+excessDeathsOverSub2 = excessDeathsOver[xPostCovidOver$time > as.Date("2020/09/01") & 
+                                       xPostCovidOver$time < as.Date("2020/10/01"), 
+                               ]
+excessDeathsOverInPeriod2 = apply(excessDeathsOverSub2, 2, sum)
+round(quantile(excessDeathsOverInPeriod2))
+
+round(quantile(excessDeathsOver[nrow(excessDeathsOver), ]))
+plot(ecdf(quantile(excessDeathsOverInPeriod1)))
+plot(ecdf(quantile(excessDeathsOverInPeriod2)))
+plot(ecdf(quantile(excessDeathsOver[nrow(excessDeathsOver), ])))
+```
+
+young people
+
+```{r Q2 0-49 years old}
+plot(x[x$age == "0-49 years old", c("time", "dead")], type = "o", log = "y")
+matplot(xWide2[xWide2$age == "0-49 years old", Syear], type = "l", lty = 1, 
+        col = Scol, main="Death counts by years for under 50 people")
+legend("topright", col = Scol, legend = Syear, bty = "n", lty = 1, lwd = 3)
+
+xForInlaUnder50= xForInla[xForInla$age == '0-49 years old', ]
+library(INLA, verbose=FALSE)
+
+res3 = inla(dead ~ sin12 + sin6 + cos12 + cos6 + 
+                   f(timeIid, prior='pc.prec', param= c(log(1.2), 0.5)) + 
+                   f(timeForInla, model = 'rw2', prior='pc.prec', 
+                     param= c(0.01, 0.5)), data=xForInlaUnder50, 
+           control.predictor = list(compute=TRUE, link=1), 
+           control.compute = list(config=TRUE), 
+           # control.inla = list(fast=FALSE, strategy='laplace'), 
+           family='poisson')
+```
+
+``` {r Q2 res3 plots}
+qCols = paste0(c(0.5, 0.025, 0.975), "quant")
+rbind(res3$summary.fixed[, qCols], Pmisc::priorPostSd(res3)$summary[, qCols])
+
+matplot(xForInlaUnder50$time, res3$summary.fitted.values[, qCols], type = "l",
+        lty = c(1, 2, 2), col = "black", log = "y")
+points(x[x$age == "0-49 years old", c("time", "dead")], cex = 0.4, col = "red")
+
+matplot(xForInlaUnder50$time, 
+        res3$summary.random$timeForInla[, c("0.5quant", "0.975quant", "0.025quant")], 
+        type = "l", lty = c(1, 2, 2), col = "black")
+
+sampleListUnder = INLA::inla.posterior.sample(30, res3, selection = list(Predictor = 0))
+sampleIntensityUnder = exp(do.call(cbind, Biobase::subListExtract(sampleListUnder, 
+                                                                 "latent")))
+sampleDeathsUnder = matrix(rpois(length(sampleIntensityUnder), sampleIntensityUnder), 
+                      nrow(sampleIntensityUnder), ncol(sampleIntensityUnder))
+
+matplot(xForInlaUnder50$time, sampleDeathsUnder, col = "#00000010", 
+        lwd = 2, lty = 1, type = "l", log = "y")
+points(x[x$age == "0-49 years old", c("time", "dead")], col = "red", cex = 0.5)
+matplot(xForInlaUnder50$time, sampleDeathsUnder, col = "#00000010", lwd = 2, 
+        lty = 1, type = "l", log = "y", xlim = as.Date(c("2019/6/1", "2020/11/1")))
+
+points(x[x$age == "0-49 years old", c("time", "dead")], col = "red", cex = 0.5)
+
+xPostCovidUnder = xPostCovid[xPostCovid$age == "0-49 years old", ]
+xPostCovidForecastUnder = sampleDeathsUnder[match(xPostCovidUnder$time,
+                                                xForInlaUnder50$time), ]
+excessDeathsUnder = xPostCovidUnder$dead - xPostCovidForecastUnder
+
+matplot(xPostCovidUnder$time, xPostCovidForecastUnder, type = "l", col = "black")
+points(xPostCovidUnder[, c("time", "dead")], col = "red")
+matplot(xPostCovidUnder$time, excessDeathsUnder, type = "l", lty = 1, col = "#00000030",
+        main="Difference between the real and predicted death counts for under 50 people")
+
+excessDeathsUnderSub1 = excessDeathsUnder[xPostCovidUnder$time > as.Date("2020/03/01") & 
+                                       xPostCovidUnder$time < as.Date("2020/06/01"), 
+                               ]
+excessDeathsUnderInPeriod1 = apply(excessDeathsUnderSub1, 2, sum)
+round(quantile(excessDeathsUnderInPeriod1))
+
+round(quantile(excessDeathsUnder[nrow(excessDeathsUnder), ]))
+
+excessDeathsUnderSub2 = excessDeathsUnder[xPostCovidUnder$time > as.Date("2020/09/01") & 
+                                       xPostCovidUnder$time < as.Date("2020/10/01"), 
+                               ]
+excessDeathsUnderInPeriod2 = apply(excessDeathsUnderSub2, 2, sum)
+round(quantile(excessDeathsUnderInPeriod2))
+
+round(quantile(excessDeathsUnder[nrow(excessDeathsUnder), ]))
+
+plot(ecdf(quantile(excessDeathsUnderInPeriod1)))
+plot(ecdf(quantile(excessDeathsUnderInPeriod2)))
+plot(ecdf(quantile(excessDeathsUnder[nrow(excessDeathsUnder), ])))
+```
+
+prior graph
+
+```{r Q2 priors}
+par(mfrow=c(1, 2))
+deathPriorOver = Pmisc::priorPostSd(res2)
+do.call(matplot, deathPriorOver$timeIid$matplot)
+do.call(legend, deathPriorOver$legend)
+mtext("timeIid", side=3)
+
+do.call(matplot, deathPriorOver$timeForInla$matplot)
+do.call(legend, deathPriorOver$legend)
+mtext("timeForInla", side=3)
+
+par(mfrow=c(1, 2))
+deathPriorUnder = Pmisc::priorPostSd(res3)
+do.call(matplot, deathPriorUnder$timeIid$matplot)
+do.call(legend, deathPriorUnder$legend)
+mtext("timeIid", side=3)
+
+do.call(matplot, deathPriorUnder$timeForInla$matplot)
+do.call(legend, deathPriorUnder$legend)
+mtext("timeForInla", side=3)
+
+```
