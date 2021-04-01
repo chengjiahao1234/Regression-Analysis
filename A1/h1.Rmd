@@ -1,0 +1,80 @@
+---
+title: "STA442_A1"
+author: "Jiahao Cheng"
+date: "2020/10/8"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+# STA442 Assignment 1
+
+library("Pmisc")
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r Affairs}
+# Q1: Affairs
+data('Affairs', package='AER')
+Affairs$ever = Affairs$affair > 0
+Affairs$religious = factor(Affairs$religiousness, levels = c(2, 1, 3, 4, 5), 
+                           labels = c('no', 'anti', 'low', 'med', 'high'))
+Affairs$ageC = Affairs$age - 32
+Affairs$yearsmarriedC = Affairs$yearsmarried - 4
+Affairs$ratingC = Affairs$rating - 1
+glmAffairsAll <- glm(ever ~ gender:children + ageC + yearsmarriedC + religious 
+                     + education + occupation + ratingC,
+                   data=Affairs, family='binomial'(link='logit'))
+
+parTableAll <- summary(glmAffairsAll)$coef
+parTableAll[, 1] <- exp(parTableAll[, 1])
+confTableAll <- na.omit(confint(glmAffairsAll))
+knitr::kable(cbind(parTableAll, confTableAll), digits=3)
+# knitr::kable(parTableAll, digit=3)
+# knitr::kable(confTableAll)
+
+glmAffairs <- glm(ever ~ 0 + gender:children + gender + children + ageC + yearsmarriedC + religious ,
+                   data=Affairs, family='binomial'(link='logit'))
+parTableAffairs <- summary(glmAffairs)$coef
+parTableAffairs[, 1] <- exp(parTableAffairs[, 1])
+confTableAffairs <- na.omit(confint(glmAffairs))
+knitr::kable(cbind(parTableAffairs, confTableAffairs), digits=3)
+# knitr::kable(parTableAffairs, digits=3)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r Smoke}
+smokeFile = file.path("smoke.RData")
+if (!file.exists(smokeFile)) {
+  download.file("http://pbrown.ca/teaching/appliedstats/data/smoke.RData", smokeFile)
+}
+(load(smokeFile))
+
+smokeSub = smoke[which(smoke$Age >= 10&!is.na(smoke$Race)), ]
+glmSmoke1 <- glm(ever_cigars_cigarillos_or ~ RuralUrban + Race + Sex + Age,
+                 family=binomial, data=smokeSub)
+glmSmoke2 <- glm(ever_ecigarette ~ 0 + RuralUrban + Race + Sex + Age, 
+                 family=binomial, data=smokeSub)
+parTable1 <- summary(glmSmoke1)$coef
+parTable1[, 1] <- exp(parTable1[, 1])
+knitr::kable(parTable1, digits=3)
+
+parTable2 <- summary(glmSmoke2)$coef
+parTable2[, 1] <- exp(parTable2[, 1])
+confTable2 <- confint(glmSmoke2)
+knitr::kable(parTable2, digit=3)
+knitr::kable(cbind(parTable2, confTable2), digit=3)
+
+# knitr::kable(summary(glmSmoke1)$coef, digits=3)
+# knitr::kable(summary(glmSmoke2)$coef, digits=3)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
